@@ -1,7 +1,7 @@
 {
   "providers": {
-    "openai": {
-      "keys": [{ "value": "env.OPENAI_API_KEY", "models": [], "weight": 1.0 }]
+    "groq": {
+      "keys": [{ "value": "env.GROQ_API_KEY", "models": [], "weight": 1.0 }]
     }
   }
 }

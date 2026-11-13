@@ -1,7 +1,13 @@
 {
+  "$schema": "https://www.getbifrost.ai/schema",
+  "config_store": { "enabled": false },
+  "logs_store": { "enabled": false },
+  "client": { "enforce_auth_on_inference": false },
   "providers": {
     "groq": {
-      "keys": [{ "value": "env.GROQ_API_KEY", "models": [], "weight": 1.0 }]
+      "keys": [
+        { "name": "groq-main", "value": "env.GROQ_API_KEY", "models": [], "weight": 1.0 }
+      ]
     }
   }
 }

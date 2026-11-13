@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stale-Answer Detector</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f6f7f4;--surface:#fff;--ink:#16211c;--mute:#5d6b64;--line:#dfe4de;--ok:#1f7a4d;--warn:#b7791f;--bad:#b83232;--accent:#16211c}
+@media(prefers-color-scheme:dark){:root{--bg:#111815;--surface:#19221e;--ink:#e8eee9;--mute:#97a69d;--line:#2a3630;--ok:#4cc38a;--warn:#e0a94a;--bad:#ef6b6b;--accent:#e8eee9}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Inter,system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:40px 20px 80px}
+h1{font:700 2.2rem/1.15 Fraunces,Georgia,serif;margin:0 0 8px}p.sub{color:var(--mute);margin:0 0 24px;max-width:60ch}
+textarea{width:100%;min-height:150px;padding:14px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit;resize:vertical}
+.row{display:flex;gap:10px;margin:12px 0 28px;flex-wrap:wrap}
+button{font:600 .95rem Inter;padding:10px 18px;border-radius:6px;border:1px solid var(--accent);cursor:pointer}
+#go{background:var(--accent);color:var(--bg)}#go:disabled{opacity:.5}#ex{background:none;color:var(--ink);border-color:var(--line)}
+button:focus-visible,textarea:focus-visible{outline:3px solid var(--warn);outline-offset:2px}
+.sum{display:flex;align-items:baseline;gap:14px;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:8px}
+.sum b{font:700 3rem Fraunces,serif}.claim{background:var(--surface);border:1px solid var(--line);border-left:6px solid var(--c);border-radius:6px;padding:16px;margin:14px 0}
+.claim h3{margin:0 0 6px;font-size:1.02rem}.meta{display:flex;gap:10px;align-items:center;font-size:.85rem;color:var(--mute);margin-bottom:8px;flex-wrap:wrap}
+.pill{font-weight:600;color:var(--c)}.bar{flex:0 0 110px;height:6px;background:var(--line);border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;background:var(--c)}
+.fix{background:var(--bg);padding:8px 10px;border-radius:4px;margin:8px 0}
+details{font-size:.88rem;color:var(--mute)}a{color:var(--ink)}.err{color:var(--bad)}
+</style></head><body><main>
+<h1>Stale-Answer Detector</h1>
+<p class="sub">Paste an answer from any AI. We pull out the claims that could have gone out of date and re-check each one against live web sources.</p>
+<textarea id="t" aria-label="AI-generated answer" placeholder="Paste an AI-generated answer here…"></textarea>
+<div class="row"><button id="go">Check freshness</button><button id="ex">Use an example</button></div>
+<div id="out" aria-live="polite"></div></main>
+<script>
+const $=s=>document.querySelector(s),t=$('#t'),out=$('#out');
+const col=v=>v=='current'?'var(--ok)':v=='outdated'?'var(--bad)':'var(--warn)';
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+$('#ex').onclick=()=>t.value="OpenAI's GPT-4 costs $30 per million input tokens. The current US Federal Reserve chair is Jerome Powell. Python 3.11 is the latest stable Python release. The Eiffel Tower is 330 metres tall.";
+$('#go').onclick=async()=>{
+ const b=$('#go');b.disabled=true;b.textContent='Checking sources…';out.innerHTML='';
+ try{
+  const r=await fetch('/api/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({answer:t.value})});
+  const d=await r.json();if(!r.ok)throw new Error(d.detail||'Request failed');
+  out.innerHTML=`<div class="sum"><b>${d.overall_score??'–'}</b><span>overall freshness, from ${d.checked.length} time-sensitive claim(s)</span></div>`+
+  (d.checked.length?'':'<p>No time-sensitive claims found.</p>')+
+  d.checked.map(c=>`<div class="claim" style="--c:${col(c.verdict)}"><h3>${esc(c.claim)}</h3>
+   <div class="meta"><span class="pill">${esc((c.verdict||'').replace('_',' '))}</span><span>${esc(c.category)}</span>
+   <span class="bar"><i style="width:${c.freshness_score??0}%"></i></span><span>${c.freshness_score??'–'}/100</span><span>${esc(c.confidence||'')} confidence</span></div>
+   <div>${esc(c.explanation)}</div>${c.current_info?`<div class="fix"><b>Current info:</b> ${esc(c.current_info)}</div>`:''}
+   <details><summary>${(c.sources||[]).length} sources</summary><ul>${(c.sources||[]).map(s=>`<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title||s.url)}</a></li>`).join('')}</ul></details></div>`).join('')+
+  (d.timeless.length?`<details><summary>${d.timeless.length} timeless claim(s) skipped</summary><ul>${d.timeless.map(c=>`<li>${esc(c.claim)}</li>`).join('')}</ul></details>`:'');
+ }catch(e){out.innerHTML=`<p class="err">${esc(e.message)}</p>`}
+ b.disabled=false;b.textContent='Check freshness';
+};
+</script></body></html>

@@ -1,7 +1,8 @@
-"""Stale-Answer Detector: Bifrost (LLM gateway) + Tavily (live web search)."""
+"""Freshcheck: stale-answer detector. Bifrost (LLM gateway) + Tavily (live web search)."""
 import json, os, re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
@@ -12,25 +13,35 @@ from pydantic import BaseModel
 load_dotenv()
 TAVILY_KEY = os.getenv("TAVILY_API_KEY", "")
 BIFROST_URL = os.getenv("BIFROST_URL", "http://localhost:8080/v1/chat/completions")
-MODEL = os.getenv("BIFROST_MODEL", "openai/gpt-4o-mini")
-BIFROST_KEY = os.getenv("BIFROST_API_KEY", "")
+MODEL = os.getenv("BIFROST_MODEL", "groq/openai/gpt-oss-120b")
+BIFROST_VK = os.getenv("BIFROST_VK", "")        # Bifrost virtual key (x-bf-vk header)
+BIFROST_KEY = os.getenv("BIFROST_API_KEY", "")  # optional Bearer token
+BASE_DIR = Path(__file__).parent
 
-app = FastAPI(title="Stale-Answer Detector")
+app = FastAPI(title="Freshcheck")
 
 
 def llm(system: str, user: str) -> dict:
-    """All model calls go through Bifrost so models/providers are swappable via config."""
+    """Every model call goes through Bifrost, so models and providers are swappable via gateway config."""
     headers = {"Content-Type": "application/json"}
+    if BIFROST_VK:
+        headers["x-bf-vk"] = BIFROST_VK
     if BIFROST_KEY:
         headers["Authorization"] = f"Bearer {BIFROST_KEY}"
-    r = requests.post(BIFROST_URL, headers=headers, timeout=90, json={
-        "model": MODEL, "temperature": 0,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-    })
-    r.raise_for_status()
-    text = r.json()["choices"][0]["message"]["content"]
-    m = re.search(r"\{.*\}", text, re.S)  # tolerate code fences / preamble
-    return json.loads(m.group(0))
+    payload = {"model": MODEL, "temperature": 0,
+               "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+    last_err = None
+    for _ in range(2):  # one retry if the model returns malformed JSON
+        r = requests.post(BIFROST_URL, headers=headers, json=payload, timeout=90)
+        if not r.ok:
+            raise RuntimeError(f"Bifrost {r.status_code}: {r.text[:300]}")
+        text = r.json()["choices"][0]["message"].get("content") or ""
+        m = re.search(r"\{.*\}", text, re.S)  # tolerate code fences / preamble
+        try:
+            return json.loads(m.group(0))
+        except Exception as e:
+            last_err = e
+    raise RuntimeError(f"Model returned invalid JSON: {last_err}")
 
 
 def tavily(query: str) -> list[dict]:
@@ -69,28 +80,37 @@ def verify(c: dict) -> dict:
                 f"CLAIM: {c['claim']}\n\nEVIDENCE:\n" + json.dumps(ev, indent=1))
         j["freshness_score"] = max(0, min(100, int(j.get("freshness_score", 40))))
         return {**c, **j, "sources": ev}
-    except Exception as e:  # keep one failure from sinking the whole report
+    except Exception as e:  # one failed claim must not sink the whole report
         return {**c, "verdict": "unverifiable", "freshness_score": None,
                 "explanation": f"Verification failed: {e}", "sources": []}
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "model": MODEL, "bifrost_url": BIFROST_URL,
+            "tavily_key_set": bool(TAVILY_KEY), "virtual_key_set": bool(BIFROST_VK)}
 
 
 @app.post("/api/check")
 def check(req: Req):
     if not TAVILY_KEY:
         raise HTTPException(500, "TAVILY_API_KEY is not set")
+    if not req.answer.strip():
+        raise HTTPException(400, "Paste an answer to check")
     if len(req.answer) > 8000:
         raise HTTPException(400, "Answer too long (max 8000 chars)")
     try:
-        claims = llm(EXTRACT_SYS, req.answer)["claims"]
+        claims = llm(EXTRACT_SYS, req.answer).get("claims", [])
     except Exception as e:
         raise HTTPException(502, f"Bifrost request failed: {e}")
     flagged = [c for c in claims if c.get("time_sensitive")]
     with ThreadPoolExecutor(max_workers=5) as ex:
         checked = list(ex.map(verify, flagged))
-    skipped = [c for c in claims if not c.get("time_sensitive")]
+    timeless = [c for c in claims if not c.get("time_sensitive")]
     scores = [c["freshness_score"] for c in checked if c["freshness_score"] is not None]
     return {"overall_score": round(sum(scores) / len(scores)) if scores else None,
-            "checked": checked, "timeless": skipped}
+            "checked": checked, "timeless": timeless}
 
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# Mounted last so /api/* and /health take priority. Absolute path avoids cwd issues on Render.
+app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="static")

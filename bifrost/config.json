@@ -6,7 +6,12 @@
   "providers": {
     "groq": {
       "keys": [
-        { "name": "groq-main", "value": "env.GROQ_API_KEY", "models": [], "weight": 1.0 }
+        {
+          "name": "groq-main",
+          "value": "env.GROQ_API_KEY",
+          "models": ["openai/gpt-oss-120b", "openai/gpt-oss-20b"],
+          "weight": 1.0
+        }
       ]
     }
   }
